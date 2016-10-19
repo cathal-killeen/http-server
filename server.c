@@ -129,8 +129,16 @@ int main (int argc, char *argv[]) {
             if (read < 0) on_error("Client read failed\n");
             printf("%s\n",buf);
             // printf("%i = read\n", read);
-            strcat(res,"HTTP/1.1 200 OK\nContent-Type: text/html\n\n<html><body><h1>Happy New Millennium!</h1></body></html>");
-
+            char content[BUFFER_SIZE];
+            strcpy(content,"<html><body><h1>Happy New Millennium!</h1></body></html>");
+            strcpy(res,"HTTP/1.1 200 OK\n");
+            strcat(res,"Content-Length: ");
+            char contentLength[BUFFER_SIZE];
+            sprintf(contentLength, "%lu", strlen(content));
+            strcat(res,contentLength);
+            strcat(res,"\nContent-Type: text/html\n\n");
+            strcat(res,content);
+            printf("%s\n",res);
             err = send(client_fd, res, read, 0);
             if (err < 0) on_error("Client write failed\n");
         }
