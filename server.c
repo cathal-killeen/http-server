@@ -29,10 +29,19 @@ typedef struct{
 
 typedef struct{
     char method[10];                        //GET,PUT,ETC
-    char filename[BUFFER_SIZE];             //file name
+    char URI[BUFFER_SIZE];             //file name
     char version[BUFFER_SIZE];              // HTTP/1.1
     int keepAlive;                          // 1 if Connection: Keep-Alive specified
 }Request;
+
+typedef struct{
+    char version[BUFFER_SIZE];
+    int status;
+    bool keepAlive;
+    bool file;                              //true if response is a file, false if it is custom html - as these two cases are handled differently
+    char filepath[BUFFER_SIZE];             //contains the full file path of the response - eg. combines the document root with the request URI
+    char customHTML[BUFFER_SIZE];           //contains a string of HTML which will be sent
+}Response;
 
 //convert string to lowercase
 void strToLower(char *str){
@@ -124,6 +133,60 @@ Config setServerConfig(){
     return config;
 }
 
+char *statusString(Response res){
+    char *string = malloc(BUFFER_SIZE);
+    switch (res.status) {
+        case 200:
+            strcpy(string,"200 OK");
+            break;
+        case 400:
+            strcpy(string,"400 Bad Request");
+            break;
+        case 404:
+            strcpy(string,"404 Not Found");
+            break;
+        case 500:
+            strcpy(string,"500 Internal Server Error");
+        case 501:
+            strcpy(string,"501 Not Implemented");
+    }
+    return string;
+}
+
+char *contentLength(Response res){
+    char *string = malloc(BUFFER_SIZE);
+    strcpy(string, "Content-Length: ");
+    char length[BUFFER_SIZE];
+    sprintf(length, "%lu", strlen(res.customHTML));
+    strcat(string, length);
+    strcat(string, "\n");
+    return string;
+}
+
+int sendFileResponse(Response res, int client_fd){
+    return send(client_fd, res.filepath, BUFFER_SIZE, 0);
+}
+
+int sendContentResponse(Response res, int client_fd){
+    char resString[BUFFER_SIZE];
+    strcpy(resString,res.version);       //add version to resString
+    strcat(resString," ");
+    strcat(resString,statusString(res));        //add status code and message
+    strcat(resString,"\n");
+    if(res.keepAlive){
+        strcat(resString,"Connection: Keep-Alive\n");
+    }
+    strcat(resString,contentLength(res));
+    strcat(resString,"\n");
+    strcat(resString,res.customHTML);
+    return send(client_fd, resString, BUFFER_SIZE, 0);
+}
+
+int sendResponse(Response res, int client_fd){
+    if(res.file) return sendFileResponse(res,client_fd);
+    else return sendContentResponse(res,client_fd);
+}
+
 //checks if configuration is valid - will terminate if values are missing or invalid
 void validateConfig(Config c){
     //port
@@ -145,8 +208,8 @@ Request parseRequest(char* httpString){
     char* spl = NULL;
     spl = strtok(httpString, " "); //get the method
     strcpy(r.method, spl);
-    spl = strtok(NULL, " "); //get the filename
-    strcpy(r.filename, spl);
+    spl = strtok(NULL, " "); //get the URI
+    strcpy(r.URI, spl);
     spl = strtok(NULL, " "); //get the version
     strcpy(r.version, spl);
     strToLower(httpString);
@@ -154,6 +217,64 @@ Request parseRequest(char* httpString){
         r.keepAlive = 1;
     }
     return r;
+}
+
+
+Response makeResponse(Request req, Config config){
+    Response res;
+    strcpy(res.version,req.version);        //copy version from the request
+    res.file = false;   //set default
+
+    char content[BUFFER_SIZE];
+
+    if(strcmp(req.method,"GET") == 0){
+        if(strcmp(req.URI,"/") == 0){
+            for(int i = 0;i<config.numDefault;i++){
+                if(fileExists(config.defaultPage[i],config)){
+                    strcat(req.URI,config.defaultPage[i]);
+                }
+            }
+        }
+        if(fileExists(req.URI,config)){
+            res.status = 200;
+            res.file = true;
+            strcpy(res.filepath, config.root);
+            strcpy(res.filepath, req.URI);
+            strip(res.filepath);                //remove \n and \t from filepath
+        }else{
+            res.status = 404;
+            strcpy(content,"<html><body><h1>404 Not Found</h1>");
+            strcat(content,req.URI);
+            strcat(content," could not be found</body></html>");
+
+            strcpy(res.customHTML,content);
+        }
+    }else if(
+        strcmp(req.method,"HEAD") == 0 ||
+        strcmp(req.method,"POST") == 0 ||
+        strcmp(req.method,"PUT") == 0 ||
+        strcmp(req.method,"DELETE") == 0 ||
+        strcmp(req.method,"CONNECT") == 0 ||
+        strcmp(req.method,"OPTIONS") == 0 ||
+        strcmp(req.method,"TRACE") == 0){
+
+        res.status = 501;
+
+        strcpy(content,"<html><body><h1>501	Not	Implemented</h1>\n");
+        strcat(content,req.method);
+        strcat(content," method not implemented by the server :(</body></html>");
+
+        strcpy(res.customHTML,content);
+    }else{
+        res.status = 400;
+        strcpy(content,"<html><body><h1>400 Bad Request</h1>");
+        strcat(content,req.method);
+        strcat(content," is not a valid HTTP method</body></html>");
+        
+        strcpy(res.customHTML,content);
+    }
+
+    return res;
 }
 
 int main (int argc, char *argv[]) {
@@ -195,71 +316,11 @@ int main (int argc, char *argv[]) {
             if (read < 0) on_error("Client read failed\n");
             printf("%s\n",buf);
             Request req = parseRequest(buf);
-            char content[BUFFER_SIZE];
+            Response res = makeResponse(req, config);
 
-            if(strcmp(req.method,"GET") == 0){
-                printf("Filename: %s",req.filename);
-                if(strcmp(req.filename,"/")){
-                    for(int i = 0;i<config.numDefault;i++){
-                        if(fileExists(config.defaultPage[i],config)){
-                            strcat(req.filename,config.defaultPage[i]);
-                        }
-                    }
-                }
-                if(fileExists(req.filename,config)){
-                    printf("FILE EXISTS!");
-                }else{
-                    strcpy(content,"<html><body><h1>404 Not Found</h1>");
-                    strcat(content,req.filename);
-                    strcat(content," could not be found</body></html>");
-                    strcpy(res,req.version);
-                    strcat(res," 404 Not Found\n");
-                    strcat(res,"Content-Length: ");
-                    char contentLength[BUFFER_SIZE];
-                    sprintf(contentLength, "%lu", strlen(content));
-                    strcat(res,contentLength);
-                    strcat(res,"\nContent-Type: text/html\n\n");
-                    strcat(res,content);
-                    err = send(client_fd, res, read, 0);
-                    if (err < 0) on_error("Client write failed\n");
-                }
-            }else if(
-                strcmp(req.method,"HEAD") == 0 ||
-                strcmp(req.method,"POST") == 0 ||
-                strcmp(req.method,"PUT") == 0 ||
-                strcmp(req.method,"DELETE") == 0 ||
-                strcmp(req.method,"CONNECT") == 0 ||
-                strcmp(req.method,"OPTIONS") == 0 ||
-                strcmp(req.method,"TRACE") == 0){
+            err = sendResponse(res,client_fd);
+            if (err < 0) on_error("Client write failed\n");
 
-                strcpy(content,"<html><body><h1>501	Not	Implemented</h1>\n");
-                strcat(content,req.method);
-                strcat(content," method not implemented by the server :(</body></html>");
-                strcpy(res,req.version);
-                strcat(res," 501 Not Implemented\n");
-                strcat(res,"Content-Length: ");
-                char contentLength[BUFFER_SIZE];
-                sprintf(contentLength, "%lu", strlen(content));
-                strcat(res,contentLength);
-                strcat(res,"\nContent-Type: text/html\n\n");
-                strcat(res,content);
-                err = send(client_fd, res, read, 0);
-                if (err < 0) on_error("Client write failed\n");
-            }else{
-                strcpy(content,"<html><body><h1>400 Bad Request</h1>");
-                strcat(content,req.method);
-                strcat(content," is not a valid HTTP method</body></html>");
-                strcpy(res,req.version);
-                strcat(res," 400 Bad Request\n");
-                strcat(res,"Content-Length: ");
-                char contentLength[BUFFER_SIZE];
-                sprintf(contentLength, "%lu", strlen(content));
-                strcat(res,contentLength);
-                strcat(res,"\nContent-Type: text/html\n\n");
-                strcat(res,content);
-                err = send(client_fd, res, read, 0);
-                if (err < 0) on_error("Client write failed\n");
-            }
         }
     }
 
