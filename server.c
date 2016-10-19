@@ -16,31 +16,33 @@
 
 typedef struct{
     char ext[CONF_SIZE];            //eg. .html
-    char type[CONF_SIZE];   //eg. text/html
+    char desc[CONF_SIZE];           //description eg. text/html
 }ContentType;
 
 typedef struct{
-    int port;                               //port number for server
-    char root[BUFFER_SIZE];                   //root folder of public files
-    ContentType types[CONF_SIZE];           //different content types handled by server
-    char defaultPage[CONF_SIZE][CONF_SIZE]; //default webpage - stored as an array with heirarchy
-    int numDefault;
+    int port;                                   //port number for server
+    char root[BUFFER_SIZE];                     //root folder of public files
+    ContentType types[BUFFER_SIZE];             //different content types handled by server
+    char defaultPage[CONF_SIZE][CONF_SIZE];     //default webpage - stored as an array with heirarchy
+    int numDefault;                             //number of default page options
+    int numTypes;                               //number of types handled by the server
 }Config;
 
 typedef struct{
-    char method[10];                        //GET,PUT,ETC
-    char URI[BUFFER_SIZE];             //file name
-    char version[BUFFER_SIZE];              // HTTP/1.1
-    int keepAlive;                          // 1 if Connection: Keep-Alive specified
+    char method[10];                            //GET,PUT,ETC
+    char URI[BUFFER_SIZE];                      //file name
+    char version[BUFFER_SIZE];                  // HTTP/1.1
+    int keepAlive;                              // 1 if Connection: Keep-Alive specified
 }Request;
 
 typedef struct{
     char version[BUFFER_SIZE];
     int status;
     bool keepAlive;
-    bool file;                              //true if response is a file, false if it is custom html - as these two cases are handled differently
-    char filepath[BUFFER_SIZE];             //contains the full file path of the response - eg. combines the document root with the request URI
-    char customHTML[BUFFER_SIZE];           //contains a string of HTML which will be sent
+    bool file;                                  //true if response is a file, false if it is custom html - as these two cases are handled differently
+    char filepath[BUFFER_SIZE];                 //contains the full file path of the response - eg. combines the document root with the request URI
+    char customHTML[BUFFER_SIZE];               //contains a string of HTML which will be sent
+    ContentType type;
 }Response;
 
 //convert string to lowercase
@@ -81,6 +83,31 @@ bool fileExists(char *fn, Config c){
 	}
 }
 
+//gets filename extension - found this function on stackoverflow
+const char *getFileExtension(const char *fspec) {
+    char *e = strrchr(fspec, '.');
+    if (e == NULL)
+        e = "";
+    return e;
+}
+
+//takes a filename extension such as .html and returns the description ie. 'text/html'
+//which is found in the config struct
+//if the file type isnt handled by the server -> "" will be returned
+const char *getExtDescription(Response res, Config c) {
+    char *desc = malloc(BUFFER_SIZE);
+    for(int i=0;i<c.numTypes;i++){
+        //check if the extension is equal to any of those specified in config
+        if(strcmp(c.types[i].ext,res.type.ext) == 0){
+            strcpy(desc,c.types[i].desc);
+            return desc;
+        }
+    }
+    desc = "";
+    return desc;
+}
+
+
 //parses the ws.conf file and stores values in Config struct
 Config setServerConfig(){
     Config config;
@@ -103,7 +130,7 @@ Config setServerConfig(){
                 strcpy(config.types[type_ind].ext, spl);
                 spl = strtok(NULL," ");
                 printf("%s\n",spl);
-                strcpy(config.types[type_ind++].type, spl);
+                strcpy(config.types[type_ind++].desc, spl);
             }else{
                 char * spl = strtok (line," ");
                 printf("%s\n",spl);
@@ -122,11 +149,12 @@ Config setServerConfig(){
                         printf("%s\n",spl);
                         spl = strtok(NULL, " ");
                     }
-                    config.numDefault = dir_ind;
                 }
             }
         }
     }
+    config.numDefault = dir_ind;
+    config.numTypes = type_ind;
     fclose(fp);
     if (line)
     free(line);
@@ -176,6 +204,7 @@ int sendContentResponse(Response res, int client_fd){
     if(res.keepAlive){
         strcat(resString,"Connection: Keep-Alive\n");
     }
+    strcat(resString,"Content-Type: text/html\n");
     strcat(resString,contentLength(res));
     strcat(resString,"\n");
     strcat(resString,res.customHTML);
@@ -236,11 +265,27 @@ Response makeResponse(Request req, Config config){
             }
         }
         if(fileExists(req.URI,config)){
-            res.status = 200;
-            res.file = true;
             strcpy(res.filepath, config.root);
             strcpy(res.filepath, req.URI);
             strip(res.filepath);                //remove \n and \t from filepath
+
+            strcpy(res.type.ext,getFileExtension(res.filepath));    //get the file extension from filepath
+            strToLower(res.type.ext);                               //convert to lowercase
+            strcpy(res.type.desc,getExtDescription(res,config));
+            printf("Ext: %s\nDesc: %s\n",res.type.ext,res.type.desc);
+            if(strcmp(res.type.desc,"") != 0){
+                res.status = 200;
+                res.file = true;
+            }else{
+                res.status = 501;
+
+                strcpy(content,"<html><body><h1>501	Not	Implemented</h1>Files with the \n");
+                strcat(content,res.type.ext);
+                strcat(content," extension are not handled by the server :(</body></html>");
+
+                strcpy(res.customHTML,content);
+            }
+
         }else{
             res.status = 404;
             strcpy(content,"<html><body><h1>404 Not Found</h1>");
@@ -270,7 +315,7 @@ Response makeResponse(Request req, Config config){
         strcpy(content,"<html><body><h1>400 Bad Request</h1>");
         strcat(content,req.method);
         strcat(content," is not a valid HTTP method</body></html>");
-        
+
         strcpy(res.customHTML,content);
     }
 
