@@ -76,16 +76,23 @@ Config setServerConfig(){
 }
 
 //checks if configuration is valid - will terminate if values are missing or invalid
-void validateConfig(Config config){
-    
+void validateConfig(Config c){
+    //port
+    if(!c.port)
+        on_error("Port number must be defined in config file");
+    if(c.port < 1024)
+        on_error("Port numbers below 1024 are not allowed. Please update in config file");
+    //root
+    if(c.root[0] == '\0')
+        on_error("DocumentRoot must be specified in config");
+    //DirectoryIndex
+    if(c.defaultPage[0][0] == '\0')
+        on_error("DirectoryIndex must be specified in config");
 }
 
 int main (int argc, char *argv[]) {
     Config config = setServerConfig();
-
-    if (argc < 2) on_error("Usage: %s [port]\n", argv[0]);
-
-    int port = atoi(argv[1]);
+    validateConfig(config);
 
     int server_fd, client_fd, err;
     struct sockaddr_in server, client;
@@ -96,7 +103,7 @@ int main (int argc, char *argv[]) {
     if (server_fd < 0) on_error("Could not create socket\n");
 
     server.sin_family = AF_INET;
-    server.sin_port = htons(port);
+    server.sin_port = htons(config.port);
     server.sin_addr.s_addr = htonl(INADDR_ANY);
 
     int opt_val = 1;
@@ -108,7 +115,7 @@ int main (int argc, char *argv[]) {
     err = listen(server_fd, 128);
     if (err < 0) on_error("Could not listen on socket\n");
 
-    printf("Server is listening on %d\n", port);
+    printf("Server is listening on %d\n", config.port);
 
     while (1) {
         socklen_t client_len = sizeof(client);
@@ -120,8 +127,8 @@ int main (int argc, char *argv[]) {
             int read = recv(client_fd, buf, BUFFER_SIZE, 0);
             if (!read) break; // done reading
             if (read < 0) on_error("Client read failed\n");
-            printf("%s",buf);
-            printf("%i = read", read);
+            printf("%s\n",buf);
+            // printf("%i = read\n", read);
             strcat(res,"HTTP/1.1 200 OK\nContent-Type: text/html\n\n<html><body><h1>Happy New Millennium!</h1></body></html>");
 
             err = send(client_fd, res, read, 0);
