@@ -73,7 +73,6 @@ bool fileExists(char *fn, Config c){
     strcpy(path,c.root);
     strcat(path,fn);
     strip(path);        //ensure path doesnt contain newline or tab (\n or \t)
-    printf("path: %s\n",path);
 	if(access( path, F_OK ) != -1 ) {
     	// file exists
 		return true;
@@ -191,8 +190,58 @@ char *contentLength(Response res){
     return string;
 }
 
+char *fileLength(int lengthOfFile){
+    char *string = malloc(BUFFER_SIZE);
+    strcpy(string, "Content-Length: ");
+    char length[BUFFER_SIZE];
+    sprintf(length, "%d", lengthOfFile);
+    strcat(string, length);
+    strcat(string, "\n");
+    return string;
+}
+
 int sendFileResponse(Response res, int client_fd){
-    return send(client_fd, res.filepath, BUFFER_SIZE, 0);
+    FILE *fp = fopen(res.filepath, "r");
+    if(fp == NULL){
+        on_error("Error opening file %s\n",res.filepath);
+    }
+    printf("File opened!\n");
+    fseek(fp, 0, SEEK_END);
+    int lengthOfFile = ftell(fp);
+    printf("File length: %i\n",lengthOfFile);
+    rewind(fp);
+
+    char resString[BUFFER_SIZE];
+    char content[BUFFER_SIZE];
+    strcpy(resString,res.version);              //add version to resString
+    strcat(resString," ");
+    strcat(resString,statusString(res));        //add status code and message
+    strcat(resString,"\n");
+    if(res.keepAlive){
+        strcat(resString,"Connection: Keep-Alive\n");
+    }
+    strcat(resString,"Content-Type: ");
+    strcat(resString,res.type.desc);
+    strcat(resString,fileLength(lengthOfFile));
+    strcat(resString,"\n");
+
+    printf("%s\n",resString);
+
+    int buf = BUFFER_SIZE - (strlen(resString)+1);
+    int toRead = lengthOfFile;
+    fread(content, 1, buf, fp);     //read first 'buf' lines of content
+    content[buf] = '\0';            //terminate string to prevent errors
+    strcat(resString,content);
+    int err = send(client_fd, resString, BUFFER_SIZE, 0);
+    while(!feof(fp)){
+        memset(resString,0,BUFFER_SIZE);
+        fread(resString, 1, BUFFER_SIZE, fp);
+        err = send(client_fd, resString, BUFFER_SIZE, 0);
+    }
+    printf("SENT!\n");
+
+    fclose(fp);
+    return err;
 }
 
 int sendContentResponse(Response res, int client_fd){
@@ -239,12 +288,16 @@ Request parseRequest(char* httpString){
     strcpy(r.method, spl);
     spl = strtok(NULL, " "); //get the URI
     strcpy(r.URI, spl);
-    spl = strtok(NULL, " "); //get the version
-    strcpy(r.version, spl);
     strToLower(httpString);
     if(strstr(httpString,"connection: keep-alive") != NULL){
         r.keepAlive = 1;
     }
+    if(strstr(httpString,"http/1.0") != NULL){
+        strcpy(r.version,"HTTP/1.0");
+    }else{
+        strcpy(r.version,"HTTP/1.1");
+    }
+
     return r;
 }
 
@@ -259,15 +312,20 @@ Response makeResponse(Request req, Config config){
     if(strcmp(req.method,"GET") == 0){
         if(strcmp(req.URI,"/") == 0){
             for(int i = 0;i<config.numDefault;i++){
-                if(fileExists(config.defaultPage[i],config)){
+                char def[BUFFER_SIZE];
+                strcpy(def,req.URI);
+                strcat(def,config.defaultPage[i]);
+                if(fileExists(def,config)){
                     strcat(req.URI,config.defaultPage[i]);
+                    break;
                 }
             }
         }
         if(fileExists(req.URI,config)){
             strcpy(res.filepath, config.root);
-            strcpy(res.filepath, req.URI);
+            strcat(res.filepath, req.URI);
             strip(res.filepath);                //remove \n and \t from filepath
+            printf("path: %s",res.filepath);
 
             strcpy(res.type.ext,getFileExtension(res.filepath));    //get the file extension from filepath
             strToLower(res.type.ext);                               //convert to lowercase
