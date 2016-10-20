@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #define BUFFER_SIZE 1024
 #define CONF_SIZE 40
@@ -44,6 +45,12 @@ typedef struct{
     char customHTML[BUFFER_SIZE];               //contains a string of HTML which will be sent
     ContentType type;
 }Response;
+
+//passed as arguments to threads
+typedef struct{
+    Config config;
+    int client_fd;
+}ThreadArgs;
 
 //convert string to lowercase
 void strToLower(char *str){
@@ -195,13 +202,6 @@ char *fileLength(int lengthOfFile){
 
 int sendFileResponse(Response res, int client_fd){
     FILE *fp = fopen(res.filepath, "rb");
-    // if(strstr(res.type.desc,"text") != NULL){
-    //     printf("text\r\r\n");
-    //     fp = fopen(res.filepath, "r");
-    // }else{
-    //     printf("image\r\n");
-    //     fp = fopen(res.filepath, "rb");
-    // }
 
     if(fp == NULL){
         on_error("Error opening file %s\r\n",res.filepath);
@@ -233,13 +233,10 @@ int sendFileResponse(Response res, int client_fd){
     strcpy(resString,header);
 
     int buf = BUFFER_SIZE - strlen(resString);
-    //char content[BUFFER_SIZE];
     char *content = malloc(buf);
     int toRead = lengthOfFile;
-    fread(content, 1, buf, fp);     //read first 'buf' lines of content
-    //content[buf] = '\0';            //terminate string to prevent errors
-    //strcat(resString,content);
-    memcpy(resString+strlen(header), content, buf);
+    fread(content, 1, buf, fp);                             //read first 'buf' lines of content
+    memcpy(resString+strlen(header), content, buf);         //memcpy used instead of strcpy so that binary files are handled
     int err = send(client_fd, resString, BUFFER_SIZE, 0);
     while(!feof(fp)){
         memset(resString,0,BUFFER_SIZE);
@@ -388,6 +385,24 @@ Response makeResponse(Request req, Config config){
     return res;
 }
 
+void *socketThread(void *args){
+    ThreadArgs *realArgs = args;
+    char buf[BUFFER_SIZE];
+    while (1) {
+        int read = recv(realArgs->client_fd, buf, BUFFER_SIZE, 0);
+        if (!read) break; // done reading
+        if (read < 0) on_error("Client read failed\r\n");
+        printf("%s\r\n",buf);
+        Request req = parseRequest(buf);
+        Response res = makeResponse(req, realArgs->config);
+
+        int err = sendResponse(res,realArgs->client_fd);
+        if (err < 0) on_error("Client write failed\r\n");
+    }
+    free(realArgs);
+    return 0;
+}
+
 int main (int argc, char *argv[]) {
     Config config = setServerConfig();
     validateConfig(config);
@@ -420,18 +435,15 @@ int main (int argc, char *argv[]) {
         client_fd = accept(server_fd, (struct sockaddr *) &client, &client_len);
 
         if (client_fd < 0) on_error("Could not establish new connection\r\n");
-
-        while (1) {
-            int read = recv(client_fd, buf, BUFFER_SIZE, 0);
-            if (!read) break; // done reading
-            if (read < 0) on_error("Client read failed\r\n");
-            printf("%s\r\n",buf);
-            Request req = parseRequest(buf);
-            Response res = makeResponse(req, config);
-
-            err = sendResponse(res,client_fd);
-            if (err < 0) on_error("Client write failed\r\n");
-
+        pthread_t tid;
+        //create pointer that stores thread arguments - we need the server config struct and the client_fd
+        ThreadArgs *args = malloc(sizeof *args);
+        args->config = config;
+        args->client_fd = client_fd;
+        //create a new thread
+        if(pthread_create(&tid, NULL, socketThread,args)){
+            //free the memory associated with args variable before terminating
+            free(args);
         }
     }
 
