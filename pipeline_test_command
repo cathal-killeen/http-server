@@ -1,0 +1,4 @@
+**** COPY AND PASE THIS IN TERMINAL TO TEST PIPELINING TIMEOUT OF SERVER ****
+** LAST NUMBER IS PORT NUMBER - MAKE SURE IT MATCHES THE PORT SPECIFIED IN WS.CONF **
+
+(echo -en "GET /index.html HTTP/1.1\r\nHost: localhost\r\nConnection: Keepalive\r\n\r\nGET /index.html HTTP/1.1\r\nHost: localhost\r\n\r\n"; sleep 10) | telnet 127.0.0.1 8097

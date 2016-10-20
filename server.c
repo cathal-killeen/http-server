@@ -9,10 +9,20 @@
 #include <stdbool.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <sys/time.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <sys/select.h>
 
+
+#define TIMEOUT 5               //timeout in seconds for pipelining requests
 #define BUFFER_SIZE 1024
 #define CONF_SIZE 40
 #define CONFIG_PATH "./ws.conf"
+
+
+//throws error
 #define on_error(...) { fprintf(stderr, __VA_ARGS__); fflush(stderr); exit(1); }
 
 typedef struct{
@@ -221,6 +231,8 @@ int sendFileResponse(Response res, int client_fd){
     strcat(header,"\r\n");
     if(res.keepAlive){
         strcat(header,"Connection: Keep-Alive\r\n");
+    }else{
+        strcat(resString,"Connection: Close\r\n");
     }
     strcat(header,"Content-Type: ");
     strcat(header,res.type.desc);
@@ -257,6 +269,8 @@ int sendContentResponse(Response res, int client_fd){
     strcat(resString,"\r\n");
     if(res.keepAlive){
         strcat(resString,"Connection: Keep-Alive\r\n");
+    }else{
+        strcat(resString,"Connection: Close\r\n");
     }
     strcat(resString,"Content-Type: text/html\r\n");
     strcat(resString,contentLength(res));
@@ -385,19 +399,49 @@ Response makeResponse(Request req, Config config){
     return res;
 }
 
+//thread function for handling a socket
 void *socketThread(void *args){
     ThreadArgs *realArgs = args;
     char buf[BUFFER_SIZE];
-    while (1) {
-        int read = recv(realArgs->client_fd, buf, BUFFER_SIZE, 0);
-        if (!read) break; // done reading
-        if (read < 0) on_error("Client read failed\r\n");
-        printf("%s\r\n",buf);
-        Request req = parseRequest(buf);
-        Response res = makeResponse(req, realArgs->config);
+    for(;;) {
+        fd_set rfds;
+        /* Wait up to five seconds. */
+        struct timeval tv;
+        int client_fd = realArgs->client_fd;
+        int n = client_fd+1;
+        int retval;
+        /* Watch stdin (fd client_fd) to see when it has input. */
+        FD_ZERO(&rfds);
+        FD_SET(client_fd, &rfds);
+        tv.tv_sec = TIMEOUT;
+        tv.tv_usec = 0;
+        //printf("retval: %i\r\n",retval);
+        retval = select(n, &rfds, NULL, NULL, &tv);
 
-        int err = sendResponse(res,realArgs->client_fd);
-        if (err < 0) on_error("Client write failed\r\n");
+        if (retval == -1){
+            on_error("Error on select()\r\n");
+        }else if(retval > 0){
+            int read = recv(realArgs->client_fd, buf, BUFFER_SIZE, 0);
+            if (!read) break; // done reading
+            if (read < 0) on_error("Client read failed\r\n");
+            printf("%s\r\n",buf);
+            Request req = parseRequest(buf);
+            Response res = makeResponse(req, realArgs->config);
+
+            int err = sendResponse(res,realArgs->client_fd);
+            if (err < 0) on_error("Client write failed\r\n");
+            //if keep-alive connection wasnt specified then close the socket
+            if(!res.keepAlive){
+                printf("Connection: Close\r\n");
+                free(realArgs);
+                return 0;
+            }
+        }else{
+            printf("Timeout!\r\n");
+            free(realArgs);
+            return 0;
+        }
+        printf("keeping connection alive!\r\n");
     }
     free(realArgs);
     return 0;
