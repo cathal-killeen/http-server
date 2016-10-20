@@ -48,17 +48,17 @@ typedef struct{
 //convert string to lowercase
 void strToLower(char *str){
 	int i=0;
-	while(str[i] != '\n' && str[i] != EOF){
+	while(str[i] != '\n' && str[i] != '\r' && str[i] != EOF){
 		str[i] = tolower(str[i]);
 		i++;
 	}
 }
 
-//removes \t or \n from a string
+//removes \t or \r\n from a string
 void strip(char *s) {
     char *p2 = s;
     while(*s != '\0') {
-    	if(*s != '\t' && *s != '\n') {
+    	if(*s != '\t' && *s != '\n' && *s != '\r') {
     		*p2++ = *s++;
     	} else {
     		++s;
@@ -72,7 +72,7 @@ bool fileExists(char *fn, Config c){
     char path[BUFFER_SIZE];
     strcpy(path,c.root);
     strcat(path,fn);
-    strip(path);        //ensure path doesnt contain newline or tab (\n or \t)
+    strip(path);        //ensure path doesnt contain newline or tab (\r\n or \t)
 	if(access( path, F_OK ) != -1 ) {
     	// file exists
 		return true;
@@ -117,35 +117,28 @@ Config setServerConfig(){
 
     fp = fopen(CONFIG_PATH, "r");
     if (fp == NULL)
-    on_error("Could not find config file\n");
+    on_error("Could not find config file\r\n");
 
     int dir_ind = 0, type_ind = 0;
     while ((read = getline(&line, &len, fp)) != -1) {
         if(line[0] != '#' && read > 0){         //check if empty line or comment
-            printf("%s\n",line);
             if(line[0] == '.'){
                 char *spl = strtok(line," ");
-                printf("ext = %s\n",spl);
                 strcpy(config.types[type_ind].ext, spl);
                 spl = strtok(NULL," ");
-                printf("%s\n",spl);
                 strcpy(config.types[type_ind++].desc, spl);
             }else{
                 char * spl = strtok (line," ");
-                printf("%s\n",spl);
                 if(strcmp(spl,"Listen") == 0){
                     spl = strtok(NULL," ");
-                    printf("%s",spl);
                     config.port = atoi(spl);
                 }else if(strcmp(spl,"DocumentRoot") == 0){
                     spl = strtok(NULL," ");
-                    printf("%s",spl);
                     strcpy(config.root,spl);
                 }else if(strcmp(spl,"DirectoryIndex") == 0){
                     spl = strtok(NULL, " ");
                     while(spl != NULL ){
                         strcpy(config.defaultPage[dir_ind++], spl);
-                        printf("%s\n",spl);
                         spl = strtok(NULL, " ");
                     }
                 }
@@ -186,7 +179,7 @@ char *contentLength(Response res){
     char length[BUFFER_SIZE];
     sprintf(length, "%lu", strlen(res.customHTML));
     strcat(string, length);
-    strcat(string, "\n");
+    strcat(string, "\r\n");
     return string;
 }
 
@@ -196,49 +189,64 @@ char *fileLength(int lengthOfFile){
     char length[BUFFER_SIZE];
     sprintf(length, "%d", lengthOfFile);
     strcat(string, length);
-    strcat(string, "\n");
+    strcat(string, "\r\n");
     return string;
 }
 
 int sendFileResponse(Response res, int client_fd){
-    FILE *fp = fopen(res.filepath, "r");
+    FILE *fp = fopen(res.filepath, "rb");
+    // if(strstr(res.type.desc,"text") != NULL){
+    //     printf("text\r\r\n");
+    //     fp = fopen(res.filepath, "r");
+    // }else{
+    //     printf("image\r\n");
+    //     fp = fopen(res.filepath, "rb");
+    // }
+
     if(fp == NULL){
-        on_error("Error opening file %s\n",res.filepath);
+        on_error("Error opening file %s\r\n",res.filepath);
     }
-    printf("File opened!\n");
+    printf("File opened!\r\n");
     fseek(fp, 0, SEEK_END);
     int lengthOfFile = ftell(fp);
-    printf("File length: %i\n",lengthOfFile);
+    printf("File length: %i\r\n",lengthOfFile);
     rewind(fp);
 
-    char resString[BUFFER_SIZE];
-    char content[BUFFER_SIZE];
-    strcpy(resString,res.version);              //add version to resString
-    strcat(resString," ");
-    strcat(resString,statusString(res));        //add status code and message
-    strcat(resString,"\n");
+    char *resString = malloc(BUFFER_SIZE);
+
+    char header[BUFFER_SIZE];
+    strcpy(header,res.version);              //add version to resString
+    strcat(header," ");
+    strcat(header,statusString(res));        //add status code and message
+    strcat(header,"\r\n");
     if(res.keepAlive){
-        strcat(resString,"Connection: Keep-Alive\n");
+        strcat(header,"Connection: Keep-Alive\r\n");
     }
-    strcat(resString,"Content-Type: ");
-    strcat(resString,res.type.desc);
-    strcat(resString,fileLength(lengthOfFile));
-    strcat(resString,"\n");
+    strcat(header,"Content-Type: ");
+    strcat(header,res.type.desc);
+    strcat(header,fileLength(lengthOfFile));
 
-    printf("%s\n",resString);
+    strcat(header,"\r\n");
 
-    int buf = BUFFER_SIZE - (strlen(resString)+1);
+    printf("%s\r\n",header);
+
+    strcpy(resString,header);
+
+    int buf = BUFFER_SIZE - strlen(resString);
+    //char content[BUFFER_SIZE];
+    char *content = malloc(buf);
     int toRead = lengthOfFile;
     fread(content, 1, buf, fp);     //read first 'buf' lines of content
-    content[buf] = '\0';            //terminate string to prevent errors
-    strcat(resString,content);
+    //content[buf] = '\0';            //terminate string to prevent errors
+    //strcat(resString,content);
+    memcpy(resString+strlen(header), content, buf);
     int err = send(client_fd, resString, BUFFER_SIZE, 0);
     while(!feof(fp)){
         memset(resString,0,BUFFER_SIZE);
         fread(resString, 1, BUFFER_SIZE, fp);
         err = send(client_fd, resString, BUFFER_SIZE, 0);
     }
-    printf("SENT!\n");
+    printf("SENT!\r\n");
 
     fclose(fp);
     return err;
@@ -249,13 +257,13 @@ int sendContentResponse(Response res, int client_fd){
     strcpy(resString,res.version);       //add version to resString
     strcat(resString," ");
     strcat(resString,statusString(res));        //add status code and message
-    strcat(resString,"\n");
+    strcat(resString,"\r\n");
     if(res.keepAlive){
-        strcat(resString,"Connection: Keep-Alive\n");
+        strcat(resString,"Connection: Keep-Alive\r\n");
     }
-    strcat(resString,"Content-Type: text/html\n");
+    strcat(resString,"Content-Type: text/html\r\n");
     strcat(resString,contentLength(res));
-    strcat(resString,"\n");
+    strcat(resString,"\r\n");
     strcat(resString,res.customHTML);
     return send(client_fd, resString, BUFFER_SIZE, 0);
 }
@@ -324,20 +332,20 @@ Response makeResponse(Request req, Config config){
         if(fileExists(req.URI,config)){
             strcpy(res.filepath, config.root);
             strcat(res.filepath, req.URI);
-            strip(res.filepath);                //remove \n and \t from filepath
+            strip(res.filepath);                //remove \r\n and \t from filepath
             printf("path: %s",res.filepath);
 
             strcpy(res.type.ext,getFileExtension(res.filepath));    //get the file extension from filepath
             strToLower(res.type.ext);                               //convert to lowercase
             strcpy(res.type.desc,getExtDescription(res,config));
-            printf("Ext: %s\nDesc: %s\n",res.type.ext,res.type.desc);
+            printf("Ext: %s\r\nDesc: %s\r\n",res.type.ext,res.type.desc);
             if(strcmp(res.type.desc,"") != 0){
                 res.status = 200;
                 res.file = true;
             }else{
                 res.status = 501;
 
-                strcpy(content,"<html><body><h1>501	Not	Implemented</h1>Files with the \n");
+                strcpy(content,"<html><body><h1>501	Not	Implemented</h1>Files with the \r\n");
                 strcat(content,res.type.ext);
                 strcat(content," extension are not handled by the server :(</body></html>");
 
@@ -363,7 +371,7 @@ Response makeResponse(Request req, Config config){
 
         res.status = 501;
 
-        strcpy(content,"<html><body><h1>501	Not	Implemented</h1>\n");
+        strcpy(content,"<html><body><h1>501	Not	Implemented</h1>\r\n");
         strcat(content,req.method);
         strcat(content," method not implemented by the server :(</body></html>");
 
@@ -390,7 +398,7 @@ int main (int argc, char *argv[]) {
     char res[BUFFER_SIZE];
 
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd < 0) on_error("Could not create socket\n");
+    if (server_fd < 0) on_error("Could not create socket\r\n");
 
     server.sin_family = AF_INET;
     server.sin_port = htons(config.port);
@@ -400,29 +408,29 @@ int main (int argc, char *argv[]) {
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt_val, sizeof opt_val);
 
     err = bind(server_fd, (struct sockaddr *) &server, sizeof(server));
-    if (err < 0) on_error("Could not bind socket\n");
+    if (err < 0) on_error("Could not bind socket\r\n");
 
     err = listen(server_fd, 128);
-    if (err < 0) on_error("Could not listen on socket\n");
+    if (err < 0) on_error("Could not listen on socket\r\n");
 
-    printf("Server is listening on %d\n", config.port);
+    printf("Server is listening on %d\r\n\r\n", config.port);
 
     while (1) {
         socklen_t client_len = sizeof(client);
         client_fd = accept(server_fd, (struct sockaddr *) &client, &client_len);
 
-        if (client_fd < 0) on_error("Could not establish new connection\n");
+        if (client_fd < 0) on_error("Could not establish new connection\r\n");
 
         while (1) {
             int read = recv(client_fd, buf, BUFFER_SIZE, 0);
             if (!read) break; // done reading
-            if (read < 0) on_error("Client read failed\n");
-            printf("%s\n",buf);
+            if (read < 0) on_error("Client read failed\r\n");
+            printf("%s\r\n",buf);
             Request req = parseRequest(buf);
             Response res = makeResponse(req, config);
 
             err = sendResponse(res,client_fd);
-            if (err < 0) on_error("Client write failed\n");
+            if (err < 0) on_error("Client write failed\r\n");
 
         }
     }
