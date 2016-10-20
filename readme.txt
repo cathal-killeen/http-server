@@ -11,3 +11,6 @@ if the client specifies the "Connection: Keep-Alive" header in the HTTP request.
 
 
 Only GET requests have been handled on the server.
+
+
+Run the server by typing './webServer'
