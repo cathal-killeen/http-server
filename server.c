@@ -15,8 +15,6 @@
 #include <unistd.h>
 #include <sys/select.h>
 
-
-#define TIMEOUT 5               //timeout in seconds for pipelining requests
 #define BUFFER_SIZE 1024
 #define CONF_SIZE 40
 #define CONFIG_PATH "./ws.conf"
@@ -36,6 +34,7 @@ typedef struct{
     ContentType types[BUFFER_SIZE];             //different content types handled by server
     char defaultPage[CONF_SIZE][CONF_SIZE];     //default webpage - stored as an array with heirarchy
     int numDefault;                             //number of default page options
+    int timeout;                                //timeout in seconds for pipelining requests
     int numTypes;                               //number of types handled by the server
 }Config;
 
@@ -152,6 +151,10 @@ Config setServerConfig(){
                 }else if(strcmp(spl,"DocumentRoot") == 0){
                     spl = strtok(NULL," ");
                     strcpy(config.root,spl);
+                }else if(strcmp(spl,"Timeout") == 0){
+                    spl = strtok(NULL," ");
+                    config.timeout = atoi(spl);
+                    printf("Timeout: %i",config.timeout);
                 }else if(strcmp(spl,"DirectoryIndex") == 0){
                     spl = strtok(NULL, " ");
                     while(spl != NULL ){
@@ -413,7 +416,7 @@ void *socketThread(void *args){
         /* Watch stdin (fd client_fd) to see when it has input. */
         FD_ZERO(&rfds);
         FD_SET(client_fd, &rfds);
-        tv.tv_sec = TIMEOUT;
+        tv.tv_sec = realArgs->config.timeout;
         tv.tv_usec = 0;
         //printf("retval: %i\r\n",retval);
         retval = select(n, &rfds, NULL, NULL, &tv);
